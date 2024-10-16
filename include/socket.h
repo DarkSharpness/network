@@ -1,9 +1,9 @@
 #pragma once
 #include "error.h"
+#include "utility.h"
 #include <arpa/inet.h>
 #include <cstddef>
 #include <cstdint>
-#include <iterator>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <new>
@@ -127,12 +127,11 @@ public:
 
     // Create a given sockaddr_in structure
     [[nodiscard]]
-    static auto ip_port(const char *ip, std::uint16_t port) noexcept
-        -> sockaddr_in {
+    static constexpr auto ip_port(const char *ip, std::uint16_t port) noexcept -> sockaddr_in {
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
-        addr.sin_port   = htons(port);
-        static_cast<void>(::inet_pton(AF_INET, ip, &addr.sin_addr));
+        addr.sin_port   = host_to_network(port);
+        addr.sin_addr   = {string_to_ipv4_noexcept(ip)};
         return addr;
     }
 
@@ -141,17 +140,16 @@ public:
     using KeepAlive = __detail::OptHelper<SO_KEEPALIVE>;
     using NoDelay   = __detail::OptHelper<TCP_NODELAY, IPPROTO_TCP>;
 
-    inline static constexpr auto reuse     = ReuseAddr{1};
-    inline static constexpr auto linger    = Linger{1};
-    inline static constexpr auto nolinger  = linger(0); // Disable linger
-    inline static constexpr auto keepalive = KeepAlive{1};
-    inline static constexpr auto nodelay   = NoDelay{1};
+    inline static constexpr auto opt_reuse     = ReuseAddr{1};
+    inline static constexpr auto opt_linger    = Linger{1};
+    inline static constexpr auto opt_nolinger  = opt_linger(0); // Disable linger
+    inline static constexpr auto opt_keepalive = KeepAlive{1};
+    inline static constexpr auto opt_nodelay   = NoDelay{1};
 
-    template <int _Opt, int _Level = SOL_SOCKET, bool _Default>
-    auto set_opt(const __detail::OptHelper<_Opt, _Level, _Default> &h) noexcept -> void {
-        static_cast<void>(::setsockopt(
-            _M_file.unsafe_get(), _Level, h._M_val.value_o, &h._M_val, sizeof(h._M_val)
-        ));
+    template <int _Opt, int _Level, bool _>
+    [[nodiscard]]
+    auto set_opt(const __detail::OptHelper<_Opt, _Level, _> &h) noexcept -> bool {
+        return ::setsockopt(_M_file.unsafe_get(), _Level, _Opt, &h._M_val, sizeof(h._M_val)) == 0;
     }
 
     [[nodiscard]]
@@ -195,13 +193,18 @@ public:
     }
 
     [[nodiscard]]
-    auto is_connected() const noexcept -> bool {
+    auto is_valid() const noexcept -> bool {
         return _M_file.valid();
     }
 
     [[nodiscard]]
     explicit operator bool() const noexcept {
         return bool{_M_file};
+    }
+
+    [[nodiscard]]
+    auto unsafe_get() const noexcept -> int {
+        return _M_file.unsafe_get();
     }
 
 private:
