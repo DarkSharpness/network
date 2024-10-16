@@ -4,10 +4,16 @@
 #include <arpa/inet.h>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <new>
 #include <optional>
+#include <ranges>
+#include <span>
+#include <string>
+#include <string_view>
 #include <sys/socket.h>
 #include <type_traits>
 #include <unistd.h>
@@ -111,7 +117,6 @@ public:
         DEFAULT = IPPROTO_IP,
         TCP     = IPPROTO_TCP,
         UDP     = IPPROTO_UDP,
-
     };
 
     explicit Socket(Domain dom, Type type, Protocol pro) :
@@ -127,11 +132,38 @@ public:
 
     // Create a given sockaddr_in structure
     [[nodiscard]]
-    static constexpr auto ip_port(const char *ip, std::uint16_t port) noexcept -> sockaddr_in {
+    static constexpr auto ipv4_port(std::string_view ip, std::uint16_t port) noexcept
+        -> sockaddr_in {
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port   = host_to_network(port);
         addr.sin_addr   = {string_to_ipv4_noexcept(ip)};
+        return addr;
+    }
+
+    [[nodiscard]]
+    static constexpr auto ipv4_port(std::uint32_t ip, std::uint16_t port) noexcept -> sockaddr_in {
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port   = host_to_network(port);
+        addr.sin_addr   = {host_to_network(ip)};
+        return addr;
+    }
+
+    [[nodiscard]]
+    static auto link_to_ipv4(std::string_view link) noexcept -> std::optional<sockaddr_in> {
+        auto hints        = addrinfo{};
+        hints.ai_family   = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        addrinfo *result;
+        const auto ret = ::getaddrinfo(link.data(), nullptr, &hints, &result);
+        if (ret != 0)
+            return {};
+
+        // Copy the result struct to sockaddr_in
+        sockaddr_in addr;
+        std::memcpy(&addr, result->ai_addr, sizeof(addr));
+        ::freeaddrinfo(result);
         return addr;
     }
 
@@ -178,17 +210,26 @@ public:
         return file ? std::optional{Socket{std::move(file)}} : std::nullopt;
     }
 
-    template <Serializable _Tp>
+    template <std::size_t _N>
     [[nodiscard]]
-    auto receive(_Tp *buf, size_t len) noexcept -> std::optional<std::size_t> {
-        const auto ret = ::recv(_M_file.unsafe_get(), buf, len, 0);
+    auto recv() noexcept -> std::optional<std::array<char, _N>> {
+        std::array<char, _N> arr{};
+        const auto ret = this->recv(arr);
+        return ret ? std::optional{arr} : std::nullopt;
+    }
+
+    template <std::ranges::contiguous_range _Tp>
+        requires Serializable<std::ranges::range_value_t<_Tp>>
+    [[nodiscard]]
+    auto recv(_Tp &range) noexcept -> std::optional<std::size_t> {
+        const auto area = std::span{std::data(range), std::size(range)};
+        const auto ret  = ::recv(_M_file.unsafe_get(), area.data(), area.size_bytes(), 0);
         return ret >= 0 ? std::optional{static_cast<std::size_t>(ret)} : std::nullopt;
     }
 
-    template <Serializable _Tp>
     [[nodiscard]]
-    auto send(const _Tp *buf, size_t len) noexcept -> std::optional<std::size_t> {
-        const auto ret = ::send(_M_file.unsafe_get(), buf, len, 0);
+    auto send(std::string_view str) noexcept -> std::optional<std::size_t> {
+        const auto ret = ::send(_M_file.unsafe_get(), str.data(), str.size(), 0);
         return ret >= 0 ? std::optional{static_cast<std::size_t>(ret)} : std::nullopt;
     }
 

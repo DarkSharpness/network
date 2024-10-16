@@ -3,8 +3,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <ios>
-#include <iostream>
 #include <limits>
 #include <netinet/in.h>
 #include <string_view>
@@ -44,9 +42,9 @@ inline constexpr auto network_to_host(_Int value) -> _Int {
 template <std::uint32_t base = 10>
 inline constexpr auto string_to_ipv4_noexcept(std::string_view str) noexcept -> in_addr_t {
     static_assert(std::numeric_limits<std::uint8_t>::digits == 8, "std::uint8_t must be 8 bits");
-    in_addr_t addr      = 0;
-    std::uint8_t octet  = 0;
-    std::size_t  offset = 0;
+    in_addr_t addr     = 0;
+    std::uint8_t octet = 0;
+    std::size_t offset = 0;
     for (const std::uint8_t c : str) {
         if (c == '.') {
             addr |= host_to_network(octet) << offset;

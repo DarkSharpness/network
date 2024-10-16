@@ -18,14 +18,14 @@ static auto test() -> void {
 
     assertion(socket.is_valid(), "socket is invalid");
     assertion(socket.set_opt(socket.opt_reuse), "set_opt failed");
-    constexpr auto ip_port = socket.ip_port("127.0.0.1", 12345);
+    constexpr auto ip_port = socket.ipv4_port("127.0.0.1", 12345);
 
     assertion(socket.bind(ip_port), "bind failed");
     assertion(socket.listen(5), "listen failed");
 
     auto client_sock = socket.accept().value();
     char buf[24];
-    const auto length = client_sock.receive(buf, sizeof(buf)).value_or(0);
+    const auto length = client_sock.recv(buf).value_or(0);
     const auto str    = std::string_view{buf, length};
 
     std::cout << "Received: " << str << '\n';
