@@ -44,7 +44,7 @@ your choice:
             std::cout << "Please re-enter the information:\n";
         }
     } else if (x == 2) {
-        // TODO: implement proxies
+        run_proxy("127.0.0.1", 4321);
     }
     std::cout << "bye\n";
     return 0;

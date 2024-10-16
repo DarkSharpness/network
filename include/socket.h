@@ -151,7 +151,7 @@ public:
     }
 
     [[nodiscard]]
-    static auto link_to_ipv4(std::string_view link) noexcept -> std::optional<sockaddr_in> {
+    static auto link_to_ipv4(std::string link) noexcept -> std::optional<sockaddr_in> {
         auto hints        = addrinfo{};
         hints.ai_family   = AF_INET;
         hints.ai_socktype = SOCK_STREAM;
@@ -202,12 +202,13 @@ public:
     }
 
     [[nodiscard]]
-    auto accept() noexcept -> std::optional<Socket> {
+    auto accept() noexcept -> std::optional<std::pair<Socket, sockaddr_in>> {
         sockaddr_in addr;
         socklen_t len = sizeof(addr);
         const auto fd = ::accept(_M_file.unsafe_get(), reinterpret_cast<sockaddr *>(&addr), &len);
         auto file     = FileManager{fd};
-        return file ? std::optional{Socket{std::move(file)}} : std::nullopt;
+        return file.valid() ? std::optional{std::pair{Socket{std::move(file)}, addr}}
+                            : std::nullopt;
     }
 
     template <std::size_t _N>

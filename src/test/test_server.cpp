@@ -23,7 +23,7 @@ static auto test() -> void {
     assertion(socket.bind(ip_port), "bind failed");
     assertion(socket.listen(5), "listen failed");
 
-    auto client_sock = socket.accept().value();
+    auto client_sock = socket.accept().value().first;
     char buf[24];
     const auto length = client_sock.recv(buf).value_or(0);
     const auto str    = std::string_view{buf, length};
