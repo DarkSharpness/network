@@ -1,4 +1,4 @@
-#include "error.h"
+#include "errors.h"
 #include "socket.h"
 #include "unit_test.h"
 #include <arpa/inet.h>
@@ -23,7 +23,7 @@ static auto test() -> void {
     assertion(socket.bind(ip_port), "bind failed");
     assertion(socket.listen(5), "listen failed");
 
-    auto client_sock = socket.accept().value().first;
+    auto client_sock = socket.accept().unwrap().first;
     char buf[24];
     const auto length = client_sock.recv(buf).value_or(0);
     const auto str    = std::string_view{buf, length};

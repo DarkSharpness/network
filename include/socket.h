@@ -1,5 +1,6 @@
 #pragma once
-#include "error.h"
+#include "errors.h"
+#include "optional.h"
 #include "utility.h"
 #include <arpa/inet.h>
 #include <cstddef>
@@ -9,7 +10,6 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <new>
-#include <optional>
 #include <ranges>
 #include <span>
 #include <string>
@@ -151,14 +151,14 @@ public:
     }
 
     [[nodiscard]]
-    static auto link_to_ipv4(std::string link) noexcept -> std::optional<sockaddr_in> {
+    static auto link_to_ipv4(std::string link) noexcept -> optional<sockaddr_in> {
         auto hints        = addrinfo{};
         hints.ai_family   = AF_INET;
         hints.ai_socktype = SOCK_STREAM;
         addrinfo *result;
         const auto ret = ::getaddrinfo(link.data(), nullptr, &hints, &result);
         if (ret != 0)
-            return {};
+            return nullopt;
 
         // Copy the result struct to sockaddr_in
         sockaddr_in addr;
@@ -202,36 +202,35 @@ public:
     }
 
     [[nodiscard]]
-    auto accept() noexcept -> std::optional<std::pair<Socket, sockaddr_in>> {
+    auto accept() noexcept -> optional<std::pair<Socket, sockaddr_in>> {
         sockaddr_in addr;
         socklen_t len = sizeof(addr);
         const auto fd = ::accept(_M_file.unsafe_get(), reinterpret_cast<sockaddr *>(&addr), &len);
         auto file     = FileManager{fd};
-        return file.valid() ? std::optional{std::pair{Socket{std::move(file)}, addr}}
-                            : std::nullopt;
+        return file.valid() ? optional{std::pair{Socket{std::move(file)}, addr}} : nullopt;
     }
 
     template <std::size_t _N>
     [[nodiscard]]
-    auto recv() noexcept -> std::optional<std::array<char, _N>> {
+    auto recv() noexcept -> optional<std::array<char, _N>> {
         std::array<char, _N> arr{};
         const auto ret = this->recv(arr);
-        return ret ? std::optional{arr} : std::nullopt;
+        return ret ? optional{arr} : std::nullopt;
     }
 
     template <std::ranges::contiguous_range _Tp>
         requires Serializable<std::ranges::range_value_t<_Tp>>
     [[nodiscard]]
-    auto recv(_Tp &range) noexcept -> std::optional<std::size_t> {
+    auto recv(_Tp &range) noexcept -> optional<std::size_t> {
         const auto area = std::span{std::data(range), std::size(range)};
         const auto ret  = ::recv(_M_file.unsafe_get(), area.data(), area.size_bytes(), 0);
-        return ret >= 0 ? std::optional{static_cast<std::size_t>(ret)} : std::nullopt;
+        return ret >= 0 ? optional{static_cast<std::size_t>(ret)} : nullopt;
     }
 
     [[nodiscard]]
-    auto send(std::string_view str) noexcept -> std::optional<std::size_t> {
+    auto send(std::string_view str) noexcept -> optional<std::size_t> {
         const auto ret = ::send(_M_file.unsafe_get(), str.data(), str.size(), 0);
-        return ret >= 0 ? std::optional{static_cast<std::size_t>(ret)} : std::nullopt;
+        return ret >= 0 ? optional{static_cast<std::size_t>(ret)} : nullopt;
     }
 
     [[nodiscard]]
