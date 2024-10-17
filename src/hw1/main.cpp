@@ -8,7 +8,7 @@ auto main() -> int {
     std::cout <<
         R"(choose an demo to run:
     1. send a mail to students in SJTU
-    2. proxies
+    2. run a simple proxy server
 your choice:
 )";
     std::string sender;
@@ -44,6 +44,7 @@ your choice:
             std::cout << "Please re-enter the information:\n";
         }
     } else if (x == 2) {
+        std::cout << "running proxy on localhost:4321\n";
         run_proxy("127.0.0.1", 4321);
     }
     std::cout << "bye\n";
