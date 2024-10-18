@@ -5,6 +5,7 @@
 #include <cstring>
 #include <iostream>
 #include <netinet/in.h>
+#include <string>
 #include <string_view>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -23,12 +24,11 @@ static auto test() -> void {
     assertion(socket.bind(ip_port), "bind failed");
     assertion(socket.listen(5), "listen failed");
 
-    auto client_sock = socket.accept().unwrap().first;
-    char buf[24];
-    const auto length = client_sock.recv(buf).value_or(0);
-    const auto str    = std::string_view{buf, length};
+    auto client_sock  = socket.accept().unwrap().first;
+    auto buffer       = std::string(24, '\0');
+    const auto length = client_sock.recv(buffer).value_or(0);
 
-    std::cout << "Received: " << str << '\n';
+    std::cout << "Received: " << buffer << '\n';
     std::cout << "Length: " << length << '\n';
 }
 

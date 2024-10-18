@@ -1,8 +1,8 @@
 #pragma once
-#include "errors.h"
 #include "optional.h"
 #include "utility.h"
 #include <arpa/inet.h>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -10,8 +10,6 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <new>
-#include <ranges>
-#include <span>
 #include <string>
 #include <string_view>
 #include <sys/socket.h>
@@ -34,15 +32,23 @@ public:
 
     FileManager(FileManager &&other) noexcept : _M_fd(std::exchange(other._M_fd, _S_invalid)) {}
 
+    // Close the socket silently
+    ~FileManager() noexcept {
+        if (this->valid() && ::close(_M_fd) != 0)
+            errno = 0; // Ignore the error, avoid throwing exception
+    }
+
     auto operator=(FileManager &&other) noexcept -> FileManager & {
-        std::swap(_M_fd, other._M_fd);
+        _M_fd = std::exchange(other._M_fd, _S_invalid);
         return *this;
     }
 
+    [[nodiscard]]
     auto valid() const noexcept -> bool {
         return _M_fd != _S_invalid;
     }
 
+    [[nodiscard]]
     explicit operator bool() const noexcept {
         return this->valid();
     }
@@ -53,7 +59,7 @@ public:
     }
 
     [[nodiscard]]
-    auto reset() noexcept -> bool {
+    auto reset() noexcept -> optional<> {
         if (this->valid()) {
             return ::close(std::exchange(_M_fd, _S_invalid)) == 0;
         } else {
@@ -61,13 +67,7 @@ public:
         }
     }
 
-    // Close the socket silently
-    ~FileManager() noexcept {
-        if (this->valid()) { // Avoid throwing exception in destructor
-            static_cast<void>(::close(_M_fd));
-        }
-    }
-
+    [[nodiscard]]
     auto unsafe_get() const noexcept -> int {
         return _M_fd;
     }
@@ -120,9 +120,7 @@ public:
     };
 
     explicit Socket(Domain dom, Type type, Protocol pro) :
-        _M_file(::socket(static_cast<int>(dom), static_cast<int>(type), static_cast<int>(pro))) {
-        assertion(_M_file, "Failed to create socket");
-    }
+        _M_file(::socket(static_cast<int>(dom), static_cast<int>(type), static_cast<int>(pro))) {}
 
     Socket(const Socket &)                     = delete;
     auto operator=(const Socket &) -> Socket & = delete;
@@ -157,14 +155,16 @@ public:
         hints.ai_socktype = SOCK_STREAM;
         addrinfo *result;
         const auto ret = ::getaddrinfo(link.data(), nullptr, &hints, &result);
-        if (ret != 0)
-            return nullopt;
-
-        // Copy the result struct to sockaddr_in
-        sockaddr_in addr;
-        std::memcpy(&addr, result->ai_addr, sizeof(addr));
-        ::freeaddrinfo(result);
-        return addr;
+        if (ret != 0) {
+            ::freeaddrinfo(result);
+            return erropt;
+        } else {
+            // Copy the result struct to sockaddr_in
+            sockaddr_in addr;
+            std::memcpy(&addr, result->ai_addr, sizeof(addr));
+            ::freeaddrinfo(result);
+            return addr;
+        }
     }
 
     using ReuseAddr = __detail::OptHelper<SO_REUSEADDR>;
@@ -180,24 +180,24 @@ public:
 
     template <int _Opt, int _Level, bool _>
     [[nodiscard]]
-    auto set_opt(const __detail::OptHelper<_Opt, _Level, _> &h) noexcept -> bool {
+    auto set_opt(const __detail::OptHelper<_Opt, _Level, _> &h) noexcept -> optional<> {
         return ::setsockopt(_M_file.unsafe_get(), _Level, _Opt, &h._M_val, sizeof(h._M_val)) == 0;
     }
 
     [[nodiscard]]
-    auto bind(const sockaddr_in &addr) noexcept -> bool {
+    auto bind(const sockaddr_in &addr) noexcept -> optional<> {
         const auto *ptr = std::launder(reinterpret_cast<const sockaddr *>(&addr));
         return ::bind(_M_file.unsafe_get(), ptr, sizeof(addr)) == 0;
     }
 
     [[nodiscard]]
-    auto connect(const sockaddr_in &addr) noexcept -> bool {
+    auto connect(const sockaddr_in &addr) noexcept -> optional<> {
         const auto *ptr = std::launder(reinterpret_cast<const sockaddr *>(&addr));
         return ::connect(_M_file.unsafe_get(), ptr, sizeof(addr)) == 0;
     }
 
     [[nodiscard]]
-    auto listen(int backlog) noexcept -> bool {
+    auto listen(int backlog) noexcept -> optional<> {
         return ::listen(_M_file.unsafe_get(), backlog) == 0;
     }
 
@@ -206,31 +206,35 @@ public:
         sockaddr_in addr;
         socklen_t len = sizeof(addr);
         const auto fd = ::accept(_M_file.unsafe_get(), reinterpret_cast<sockaddr *>(&addr), &len);
-        auto file     = FileManager{fd};
-        return file.valid() ? optional{std::pair{Socket{std::move(file)}, addr}} : nullopt;
+        if (auto file = FileManager{fd}) {
+            return std::pair{Socket{std::move(file)}, addr};
+        } else {
+            return erropt;
+        }
     }
 
-    template <std::size_t _N>
     [[nodiscard]]
-    auto recv() noexcept -> optional<std::array<char, _N>> {
-        std::array<char, _N> arr{};
-        const auto ret = this->recv(arr);
-        return ret ? optional{arr} : std::nullopt;
-    }
-
-    template <std::ranges::contiguous_range _Tp>
-        requires Serializable<std::ranges::range_value_t<_Tp>>
-    [[nodiscard]]
-    auto recv(_Tp &range) noexcept -> optional<std::size_t> {
-        const auto area = std::span{std::data(range), std::size(range)};
-        const auto ret  = ::recv(_M_file.unsafe_get(), area.data(), area.size_bytes(), 0);
-        return ret >= 0 ? optional{static_cast<std::size_t>(ret)} : nullopt;
+    auto recv(std::string &buffer) noexcept -> optional<std::size_t> {
+        // Resize the buffer to the maximum size, but without ovewriting the data
+        buffer.resize_and_overwrite(buffer.capacity(), [](char *, std::size_t len) { return len; });
+        const auto ret = ::recv(_M_file.unsafe_get(), buffer.data(), buffer.size(), 0);
+        if (ret < 0) {
+            buffer.clear();
+            return erropt;
+        } else {
+            buffer.resize(static_cast<std::size_t>(ret));
+            return static_cast<std::size_t>(ret);
+        }
     }
 
     [[nodiscard]]
     auto send(std::string_view str) noexcept -> optional<std::size_t> {
         const auto ret = ::send(_M_file.unsafe_get(), str.data(), str.size(), 0);
-        return ret >= 0 ? optional{static_cast<std::size_t>(ret)} : nullopt;
+        if (ret < 0) {
+            return erropt;
+        } else {
+            return static_cast<std::size_t>(ret);
+        }
     }
 
     [[nodiscard]]
@@ -240,11 +244,11 @@ public:
 
     [[nodiscard]]
     explicit operator bool() const noexcept {
-        return bool{_M_file};
+        return this->is_valid();
     }
 
-    [[nodiscard]]
-    auto unsafe_get() const noexcept -> int {
+    [[nodiscard, deprecated("only use _debug functions in debug mode")]]
+    auto _debug_unsafe_get() const noexcept -> int {
         return _M_file.unsafe_get();
     }
 
