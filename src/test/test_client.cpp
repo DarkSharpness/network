@@ -11,12 +11,10 @@
 static auto test() -> void {
     using dark::assertion;
 
-    auto socket = dark::Socket{
-        dark::Socket::Domain::INET4, dark::Socket::Type::STREAM, dark::Socket::Protocol::TCP
-    };
+    auto socket = dark::Socket{dark::Domain::INET4, dark::Type::STREAM, dark::Protocol::TCP};
 
     using namespace std::chrono_literals;
-    while (!socket.connect(socket.ipv4_port("127.0.0.1", 12345)))
+    while (!socket.connect(dark::Address{"127.0.0.1", 12345}))
         std::this_thread::sleep_for(1s);
 
     auto message = std::string{};

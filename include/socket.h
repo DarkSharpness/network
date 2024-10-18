@@ -1,4 +1,6 @@
 #pragma once
+#include "cstring.h"
+#include "errors.h"
 #include "optional.h"
 #include "utility.h"
 #include <arpa/inet.h>
@@ -6,10 +8,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <new>
+#include <source_location>
 #include <string>
 #include <string_view>
 #include <sys/socket.h>
@@ -101,23 +105,123 @@ private:
 
 } // namespace __detail
 
+enum class Domain {
+    INET4 = AF_INET,
+    INET6 = AF_INET6,
+};
+enum class Type {
+    STREAM = SOCK_STREAM,
+};
+enum class Protocol {
+    DEFAULT = IPPROTO_IP,
+    TCP     = IPPROTO_TCP,
+    UDP     = IPPROTO_UDP,
+};
+
+struct Address {
+public:
+    constexpr Address(std::uint32_t ip, std::uint16_t port) noexcept : _M_addr{} {
+        _M_addr.sin_family = AF_INET;
+        _M_addr.sin_port   = host_to_network(port);
+        _M_addr.sin_addr   = {host_to_network(ip)};
+    }
+
+    constexpr Address(std::string_view ip, std::uint16_t port) noexcept : _M_addr{} {
+        _M_addr.sin_family = AF_INET;
+        _M_addr.sin_port   = host_to_network(port);
+        _M_addr.sin_addr   = {string_to_ipv4_noexcept(ip)};
+    }
+
+    Address(cstring_view name, cstring_view service) noexcept : _M_addr{} {
+        auto hints        = addrinfo{};
+        hints.ai_family   = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        addrinfo *result;
+        const auto ret = ::getaddrinfo(name.c_str(), service.c_str(), &hints, &result);
+        if (ret != 0) {
+            _M_invalidate(ret);
+        } else {
+            // Copy the result struct to sockaddr_in
+            std::memcpy(&_M_addr, result->ai_addr, sizeof(_M_addr));
+            ::freeaddrinfo(result);
+        }
+    }
+
+    Address(cstring_view name, cstring_view service, std::uint16_t port) noexcept :
+        Address(name, service) {
+        if (this->port() == 0)
+            this->port(port);
+    }
+
+    [[nodiscard]]
+    constexpr auto unwrap(
+        std::format_string<const char *> fmt = "{}",
+        std::source_location loc             = std::source_location::current()
+    ) const -> const Address & {
+        const auto reason = _M_reason();
+        if (reason != 0) // Failed to resolve the address
+            assertion<bool, const char *>(false, fmt, gai_strerror(reason), loc);
+        return *this;
+    }
+
+    [[nodiscard]]
+    constexpr operator const sockaddr_in &() const {
+        return this->unwrap()._M_addr;
+    }
+
+    [[nodiscard]]
+    constexpr bool is_valid() const noexcept {
+        static_assert(sizeof(sockaddr_in::sin_zero) > 1);
+        return _M_reason() == 0;
+    }
+
+    constexpr auto port() const noexcept -> std::uint16_t {
+        return network_to_host(_M_addr.sin_port);
+    }
+
+    constexpr auto port(std::uint16_t port) noexcept -> Address & {
+        _M_addr.sin_port = host_to_network(port);
+        return *this;
+    }
+
+    constexpr auto ip() const noexcept -> std::uint32_t {
+        return network_to_host(_M_addr.sin_addr.s_addr);
+    }
+
+    auto ip_str() const noexcept -> std::string {
+        return ::inet_ntoa(_M_addr.sin_addr);
+    }
+
+    constexpr auto ip(std::uint32_t ip) noexcept -> Address & {
+        _M_addr.sin_addr = {host_to_network(ip)};
+        return *this;
+    }
+
+    constexpr auto ip(std::string_view ip) noexcept -> Address & {
+        _M_addr.sin_addr = {string_to_ipv4_noexcept(ip)};
+        return *this;
+    }
+
+private:
+    static_assert(sizeof(sockaddr_in::sin_zero) >= sizeof(int));
+    static_assert(offsetof(sockaddr_in, sin_zero) % alignof(int) == 0);
+
+    auto _M_invalidate(int reason) noexcept -> void {
+        *std::launder(reinterpret_cast<int *>(_M_addr.sin_zero)) = reason;
+    }
+
+    auto _M_reason() const noexcept -> int {
+        return *std::launder(reinterpret_cast<const int *>(_M_addr.sin_zero));
+    }
+
+    alignas(alignof(int)) sockaddr_in _M_addr;
+};
+
 struct Socket {
 private:
     explicit Socket(FileManager file) noexcept : _M_file(std::move(file)) {}
 
 public:
-    enum class Domain {
-        INET4 = AF_INET,
-        INET6 = AF_INET6,
-    };
-    enum class Type {
-        STREAM = SOCK_STREAM,
-    };
-    enum class Protocol {
-        DEFAULT = IPPROTO_IP,
-        TCP     = IPPROTO_TCP,
-        UDP     = IPPROTO_UDP,
-    };
 
     explicit Socket(Domain dom, Type type, Protocol pro) :
         _M_file(::socket(static_cast<int>(dom), static_cast<int>(type), static_cast<int>(pro))) {}
@@ -127,45 +231,6 @@ public:
 
     Socket(Socket &&other) noexcept                     = default;
     auto operator=(Socket &&other) noexcept -> Socket & = default;
-
-    // Create a given sockaddr_in structure
-    [[nodiscard]]
-    static constexpr auto ipv4_port(std::string_view ip, std::uint16_t port) noexcept
-        -> sockaddr_in {
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_port   = host_to_network(port);
-        addr.sin_addr   = {string_to_ipv4_noexcept(ip)};
-        return addr;
-    }
-
-    [[nodiscard]]
-    static constexpr auto ipv4_port(std::uint32_t ip, std::uint16_t port) noexcept -> sockaddr_in {
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_port   = host_to_network(port);
-        addr.sin_addr   = {host_to_network(ip)};
-        return addr;
-    }
-
-    [[nodiscard]]
-    static auto link_to_ipv4(std::string link) noexcept -> optional<sockaddr_in> {
-        auto hints        = addrinfo{};
-        hints.ai_family   = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        addrinfo *result;
-        const auto ret = ::getaddrinfo(link.data(), nullptr, &hints, &result);
-        if (ret != 0) {
-            ::freeaddrinfo(result);
-            return erropt;
-        } else {
-            // Copy the result struct to sockaddr_in
-            sockaddr_in addr;
-            std::memcpy(&addr, result->ai_addr, sizeof(addr));
-            ::freeaddrinfo(result);
-            return addr;
-        }
-    }
 
     using ReuseAddr = __detail::OptHelper<SO_REUSEADDR>;
     using Linger    = __detail::OptHelper<SO_LINGER, SOL_SOCKET, true>;
