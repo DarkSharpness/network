@@ -58,4 +58,12 @@ inline constexpr auto string_to_ipv4_noexcept(std::string_view str) noexcept -> 
     return addr;
 }
 
+template <std::integral _Int, std::size_t base = 10>
+inline constexpr auto str_to_int_noexcept(std::string_view str) noexcept -> _Int {
+    _Int value{};
+    for (const std::uint8_t c : str)
+        value = value * base + (c - '0');
+    return value;
+}
+
 } // namespace dark

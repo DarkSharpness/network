@@ -1,95 +1,90 @@
+#include "errors.h"
+#include "hw1/cache.h"
 #include "hw1/forward.h"
+#include "hw1/html.h"
 #include "socket.h"
 #include <atomic>
 #include <csignal>
-#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <format>
 #include <iostream>
-#include <mutex>
 #include <netinet/in.h>
 #include <optional>
-#include <shared_mutex>
+#include <string>
 #include <string_view>
+#include <sys/select.h>
 #include <thread>
-#include <unordered_map>
+#include <utility>
 
-static std::shared_mutex cache_mutex;
-static std::unordered_map<std::string, std::string> cache;
 static std::atomic_size_t counter{};
 
-static auto look_up_cache(const std::string &str) -> std::optional<std::string> {
-    std::shared_lock lock{cache_mutex};
-    if (auto iter = cache.find(str); iter != cache.end()) {
-        return iter->second;
-    } else {
-        return {};
-    }
+static auto forward_data(dark::Socket &client, dark::Socket &target) -> std::string {
+    auto buffer = std::string(4096, '\0');
+    auto reply  = std::string{};
+    try {
+        while (true) {
+            auto result = dark::select({client, target}, nullptr, nullptr).unwrap();
+            static_assert(sizeof(result) == sizeof(fd_set));
+            if (result.reads.contains(client)) {
+                client.recv(buffer).unwrap();
+                if (buffer.size() == 0)
+                    break;
+                target.send(buffer).unwrap();
+            }
+            if (result.reads.contains(target)) {
+                target.recv(buffer).unwrap();
+                if (buffer.size() == 0)
+                    break;
+                client.send(buffer).unwrap();
+                reply += buffer;
+            }
+        }
+    } catch (const std::exception &) {}
+
+    return reply;
 }
 
-static auto push_to_cache(std::string host, std::string response) -> void {
-    std::unique_lock lock{cache_mutex};
-    cache.try_emplace(std::move(host), std::move(response));
-}
-
-static auto make_connection_impl(dark::Socket client) {
+static auto make_connection_impl(dark::Socket client) -> void {
     const auto uid = counter++;
     std::cout << std::format("[{}] New connection\n", uid);
 
     auto buffer = std::string(4096, '\0');
-    client.recv(buffer).unwrap("recv failed");
 
-    // Find the host in the request like "Host: www.google.com\r\n"
-    auto request = std::string_view{buffer};
-    request      = request.substr(request.find("Host: ") + 6);
-    request      = request.substr(0, request.find("\r\n"));
-    auto host    = std::string{request};
+    // Receive the request from the client
+    const auto message = receive_http(client, buffer);
+    const auto method  = parse_http(message, "", " ");
+    const auto host    = std::string{parse_http(message, " ", " ")};
+    std::cout << std::format("[{}] Connection to {}\n", uid, host);
+    const auto host_info = parse_host(host);
+    dark::assertion(host_info, "Invalid host: {}", host);
+    const auto [addr, is_http] = *host_info;
+    const auto is_http_get     = method == "GET" && is_http;
 
-    // Check if the response is cached
-    if (auto cached = look_up_cache(host); cached) {
-        std::cout << std::format("[{}] Cache hit!\n", uid);
-        client.send(*cached).unwrap("send failed");
-        return;
-    }
-
-    // connect to the target host
-    std::cout << std::format("[{}] Connecting to {}\n", uid, host);
-    auto target = dark::Socket{dark::Domain::INET4, dark::Type::STREAM, dark::Protocol::TCP};
-    target.connect(dark::Address{host, "http", 80}).unwrap();
-    target.send(buffer).unwrap("send failed: {}");
-
-    buffer.clear();
-    // Keep reading until the connection is closed
-    auto content_length = std::size_t{};
-    auto header_length  = std::size_t{};
-
-    while (true) {
-        auto response = std::string(4096, '\0');
-        target.recv(response).unwrap("recv failed: {}");
-        buffer += response;
-        if (header_length == 0) {
-            auto header = std::string_view{buffer};
-            auto pos    = header.find("\r\n\r\n");
-            if (pos == std::string_view::npos)
-                continue; // Header is not complete yet
-            // Header is complete
-            header_length    = pos + 4;
-            auto header_str  = header.substr(0, header_length);
-            auto content_str = header.substr(header_str.find("Content-Length: "));
-            content_str      = content_str.substr(0, content_str.find("\r\n"));
-            content_length   = std::stoul(std::string{content_str.substr(16)});
+    // if http 'GET' && http request
+    if (is_http_get) {
+        // Check if the response is cached
+        if (auto cached = look_up_cache(host)) {
+            std::cout << std::format("[{}] Cache hit!\n", uid);
+            client.send(*cached).unwrap();
+            return;
         }
-
-        if (buffer.size() >= header_length + content_length)
-            break;
     }
 
-    std::cout << std::format("[{}] Received {} bytes\n", uid, buffer.size());
-    push_to_cache(std::move(host), buffer);
-    client.send(buffer).unwrap("send failed");
+    auto target = dark::Socket{dark::Domain::INET4, dark::Type::STREAM, dark::Protocol::TCP};
+    target.connect(addr).unwrap();
 
-    // close the connection
+    if (method == "CONNECT") {
+        client.send("HTTP/1.1 200 OK\r\n\r\n").unwrap();
+    } else {
+        target.send(message).unwrap();
+    }
+
+    auto reply = forward_data(client, target);
+    if (is_http_get) {
+        std::cout << std::format("[{}] Caching response\n", uid);
+        push_to_cache(host, std::move(reply));
+    }
     std::cout << std::format("[{}] Connection closed\n", uid);
 }
 
@@ -99,19 +94,23 @@ static auto make_connection(dark::Socket client) -> void {
     } catch (const std::exception &e) { std::cerr << "Error: " << e.what() << '\n'; }
 }
 
-static auto interrupt_handler(int) -> void {
+inline auto interrupt_handler(int) -> void {
     std::cout << "\nProxy server is shutting down\n";
+    save_cache_to_file();
     std::exit(0);
 }
 
 auto run_proxy(std::string_view ip, std::uint16_t port) -> void {
     static_cast<void>(std::signal(SIGINT, interrupt_handler));
+    load_cache_from_file();
+
     auto server = dark::Socket{dark::Domain::INET4, dark::Type::STREAM, dark::Protocol::TCP};
 
     server.set_opt(server.opt_reuse).unwrap();
     server.bind(dark::Address{ip, port}).unwrap();
     server.listen(10).unwrap();
 
+    std::cout << "Proxy is ready to serve.\n";
     while (auto conn = server.accept()) {
         std::cout << "Proxy connection accepted\n";
         std::thread{make_connection, std::move(conn.unwrap().first)}.detach();

@@ -1,3 +1,4 @@
+#include "address.h"
 #include "errors.h"
 #include "socket.h"
 #include "unit_test.h"

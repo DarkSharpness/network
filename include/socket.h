@@ -1,85 +1,24 @@
 #pragma once
-#include "cstring.h"
-#include "errors.h"
+#include "file.h"
 #include "optional.h"
-#include "utility.h"
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstddef>
-#include <cstdint>
 #include <cstring>
-#include <format>
+#include <functional>
+#include <initializer_list>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <new>
-#include <source_location>
 #include <string>
 #include <string_view>
+#include <sys/select.h>
 #include <sys/socket.h>
-#include <type_traits>
 #include <unistd.h>
 #include <utility>
 
 namespace dark {
-
-template <typename _Tp>
-concept Serializable = std::is_trivially_copyable_v<_Tp> && std::is_trivially_destructible_v<_Tp>;
-
-struct FileManager {
-public:
-    explicit FileManager() noexcept : _M_fd(_S_invalid) {}
-    explicit FileManager(int fd) noexcept : _M_fd(fd) {}
-
-    FileManager(const FileManager &)                     = delete;
-    auto operator=(const FileManager &) -> FileManager & = delete;
-
-    FileManager(FileManager &&other) noexcept : _M_fd(std::exchange(other._M_fd, _S_invalid)) {}
-
-    // Close the socket silently
-    ~FileManager() noexcept {
-        if (this->valid() && ::close(_M_fd) != 0)
-            errno = 0; // Ignore the error, avoid throwing exception
-    }
-
-    auto operator=(FileManager &&other) noexcept -> FileManager & {
-        _M_fd = std::exchange(other._M_fd, _S_invalid);
-        return *this;
-    }
-
-    [[nodiscard]]
-    auto valid() const noexcept -> bool {
-        return _M_fd != _S_invalid;
-    }
-
-    [[nodiscard]]
-    explicit operator bool() const noexcept {
-        return this->valid();
-    }
-
-    auto set(int fd) noexcept -> void {
-        static_cast<void>(this->reset());
-        _M_fd = fd;
-    }
-
-    [[nodiscard]]
-    auto reset() noexcept -> optional<> {
-        if (this->valid()) {
-            return ::close(std::exchange(_M_fd, _S_invalid)) == 0;
-        } else {
-            return true;
-        }
-    }
-
-    [[nodiscard]]
-    auto unsafe_get() const noexcept -> int {
-        return _M_fd;
-    }
-
-private:
-    static constexpr int _S_invalid = -1;
-    int _M_fd;
-};
 
 struct Socket;
 
@@ -103,6 +42,9 @@ private:
     const int _M_val;
 };
 
+template <bool _Empty, int _Tag>
+struct FileSet;
+
 } // namespace __detail
 
 enum class Domain {
@@ -118,108 +60,15 @@ enum class Protocol {
     UDP     = IPPROTO_UDP,
 };
 
-struct Address {
-public:
-    constexpr Address(std::uint32_t ip, std::uint16_t port) noexcept : _M_addr{} {
-        _M_addr.sin_family = AF_INET;
-        _M_addr.sin_port   = host_to_network(port);
-        _M_addr.sin_addr   = {host_to_network(ip)};
-    }
-
-    constexpr Address(std::string_view ip, std::uint16_t port) noexcept : _M_addr{} {
-        _M_addr.sin_family = AF_INET;
-        _M_addr.sin_port   = host_to_network(port);
-        _M_addr.sin_addr   = {string_to_ipv4_noexcept(ip)};
-    }
-
-    Address(cstring_view name, cstring_view service) noexcept : _M_addr{} {
-        auto hints        = addrinfo{};
-        hints.ai_family   = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        addrinfo *result;
-        const auto ret = ::getaddrinfo(name.c_str(), service.c_str(), &hints, &result);
-        if (ret != 0) {
-            _M_invalidate(ret);
-        } else {
-            // Copy the result struct to sockaddr_in
-            std::memcpy(&_M_addr, result->ai_addr, sizeof(_M_addr));
-            ::freeaddrinfo(result);
-        }
-    }
-
-    Address(cstring_view name, cstring_view service, std::uint16_t port) noexcept :
-        Address(name, service) {
-        if (this->port() == 0)
-            this->port(port);
-    }
-
-    [[nodiscard]]
-    constexpr auto unwrap(
-        std::format_string<const char *> fmt = "{}",
-        std::source_location loc             = std::source_location::current()
-    ) const -> const Address & {
-        const auto reason = _M_reason();
-        if (reason != 0) // Failed to resolve the address
-            assertion<bool, const char *>(false, fmt, gai_strerror(reason), loc);
-        return *this;
-    }
-
-    [[nodiscard]]
-    constexpr operator const sockaddr_in &() const {
-        return this->unwrap()._M_addr;
-    }
-
-    [[nodiscard]]
-    constexpr bool is_valid() const noexcept {
-        static_assert(sizeof(sockaddr_in::sin_zero) > 1);
-        return _M_reason() == 0;
-    }
-
-    constexpr auto port() const noexcept -> std::uint16_t {
-        return network_to_host(_M_addr.sin_port);
-    }
-
-    constexpr auto port(std::uint16_t port) noexcept -> Address & {
-        _M_addr.sin_port = host_to_network(port);
-        return *this;
-    }
-
-    constexpr auto ip() const noexcept -> std::uint32_t {
-        return network_to_host(_M_addr.sin_addr.s_addr);
-    }
-
-    auto ip_str() const noexcept -> std::string {
-        return ::inet_ntoa(_M_addr.sin_addr);
-    }
-
-    constexpr auto ip(std::uint32_t ip) noexcept -> Address & {
-        _M_addr.sin_addr = {host_to_network(ip)};
-        return *this;
-    }
-
-    constexpr auto ip(std::string_view ip) noexcept -> Address & {
-        _M_addr.sin_addr = {string_to_ipv4_noexcept(ip)};
-        return *this;
-    }
-
-private:
-    static_assert(sizeof(sockaddr_in::sin_zero) >= sizeof(int));
-    static_assert(offsetof(sockaddr_in, sin_zero) % alignof(int) == 0);
-
-    auto _M_invalidate(int reason) noexcept -> void {
-        *std::launder(reinterpret_cast<int *>(_M_addr.sin_zero)) = reason;
-    }
-
-    auto _M_reason() const noexcept -> int {
-        return *std::launder(reinterpret_cast<const int *>(_M_addr.sin_zero));
-    }
-
-    alignas(alignof(int)) sockaddr_in _M_addr;
-};
+template <bool _Empty = false>
+struct SocketList;
 
 struct Socket {
 private:
     explicit Socket(FileManager file) noexcept : _M_file(std::move(file)) {}
+    friend struct __detail::FileSet<false, 0>;
+    friend struct __detail::FileSet<false, 1>;
+    friend struct __detail::FileSet<false, 2>;
 
 public:
 
@@ -320,5 +169,121 @@ public:
 private:
     FileManager _M_file;
 };
+
+using SocketRef = std::reference_wrapper<Socket>;
+
+template <>
+struct SocketList<false> : std::initializer_list<SocketRef> {
+    using Super_t = std::initializer_list<SocketRef>;
+    SocketList(Super_t list) noexcept : Super_t(list) {}
+    auto list() const noexcept -> const Super_t & {
+        return *this;
+    }
+};
+
+template <>
+struct SocketList<true> {
+    SocketList(std::nullptr_t) noexcept {}
+};
+
+namespace __detail {
+
+template <int _Tag>
+struct FileSet<false, _Tag> {
+public:
+    FileSet(std::initializer_list<SocketRef> files) noexcept {
+        FD_ZERO(&_M_set);
+        for (const auto &file : files)
+            FD_SET(file.get()._M_file.unsafe_get(), &_M_set);
+    }
+    FileSet(SocketList<false> files) noexcept : FileSet(files.list()) {}
+
+    bool contains(const Socket &file) const noexcept {
+        return FD_ISSET(file._M_file.unsafe_get(), &_M_set);
+    }
+    auto get() noexcept -> fd_set * {
+        return &_M_set;
+    }
+
+private:
+    fd_set _M_set;
+};
+
+template <int _Tag>
+struct FileSet<true, _Tag> {
+    FileSet(SocketList<true>) noexcept {}
+    auto get() noexcept -> fd_set * {
+        return nullptr;
+    }
+};
+
+template <bool _EmptyR, bool _EmptyW, bool _EmptyE>
+struct SelectResult {
+    [[no_unique_address]]
+    FileSet<_EmptyR, 0> reads;
+    [[no_unique_address]]
+    FileSet<_EmptyW, 1> writes;
+    [[no_unique_address]]
+    FileSet<_EmptyE, 2> excepts;
+};
+
+template <bool _EmptyR, bool _EmptyW, bool _EmptyE>
+[[nodiscard]]
+inline auto
+select(SocketList<_EmptyR> reads, SocketList<_EmptyW> writes, SocketList<_EmptyE> excepts) noexcept
+    -> optional<SelectResult<_EmptyR, _EmptyW, _EmptyE>> {
+    auto result = SelectResult<_EmptyR, _EmptyW, _EmptyE>{
+        .reads   = reads,
+        .writes  = writes,
+        .excepts = excepts,
+    };
+    const auto ret = ::select(
+        FD_SETSIZE, result.reads.get(), result.writes.get(), result.excepts.get(), nullptr
+    );
+    if (ret < 0) {
+        return erropt;
+    } else {
+        return result;
+    }
+}
+
+using _List = std::initializer_list<SocketRef>;
+
+} // namespace __detail
+
+[[nodiscard]]
+inline auto select(__detail::_List reads, __detail::_List writes, __detail::_List excepts) {
+    return __detail::select<false, false, false>(reads, writes, excepts);
+}
+
+[[nodiscard]]
+inline auto select(__detail::_List reads, __detail::_List writes, std::nullptr_t) {
+    return __detail::select<false, false, true>(reads, writes, nullptr);
+}
+
+[[nodiscard]]
+inline auto select(__detail::_List reads, std::nullptr_t, __detail::_List excepts) {
+    return __detail::select<false, true, false>(reads, nullptr, excepts);
+}
+
+[[nodiscard]]
+inline auto select(__detail::_List reads, std::nullptr_t, std::nullptr_t) {
+    return __detail::select<false, true, true>(reads, nullptr, nullptr);
+}
+
+[[nodiscard]]
+inline auto select(std::nullptr_t, __detail::_List writes, __detail::_List excepts) {
+    return __detail::select<true, false, false>(nullptr, writes, excepts);
+}
+
+[[nodiscard]]
+inline auto select(std::nullptr_t, __detail::_List writes, std::nullptr_t) {
+    return __detail::select<true, false, true>(nullptr, writes, nullptr);
+}
+
+[[nodiscard]]
+inline auto select(std::nullptr_t, std::nullptr_t, __detail::_List excepts) {
+    return __detail::select<true, true, false>(nullptr, nullptr, excepts);
+}
 
 } // namespace dark
