@@ -27,8 +27,8 @@ protected:
     using _Fmt_t                                    = std::format_string<const char *&>;
     using _Src_t                                    = std::source_location;
 
-    inline static constexpr auto _S_default = _Errno_t(-1);
-    inline static constexpr auto _S_noerror = _Errno_t(0);
+    inline static constexpr auto _S_default = _Errno_t{-1};
+    inline static constexpr auto _S_noerror = _Errno_t{0};
 };
 
 } // namespace __detail
@@ -122,7 +122,7 @@ public:
         }
 
         _Tp return_value = std::move(_M_value);
-        this->_M_destory();
+        _M_destory();
         return return_value;
     }
 
@@ -134,6 +134,10 @@ public:
     template <typename _Up>
     auto value_or(_Up &&def) && noexcept -> _Tp {
         return this->has_value() ? std::move(_M_value) : std::forward<_Up>(def);
+    }
+
+    auto discard() noexcept -> void {
+        _M_destory();
     }
 
     auto has_value() const noexcept -> bool {
@@ -178,6 +182,10 @@ public:
                 error_str = ::strerror(_M_errno);
             _Assertion_t(false, fmt, error_str, src);
         }
+        _M_errno = _S_default;
+    }
+
+    auto discard() noexcept -> void {
         _M_errno = _S_default;
     }
 

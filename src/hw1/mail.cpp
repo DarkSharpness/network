@@ -62,10 +62,10 @@ auto send_mail(std::string_view msg, std::string_view sender, std::string_view t
     );
     client.send(message).unwrap("fail to send message");
     client.recv(buffer).unwrap("fail to receive message response");
-    std::cout << "Received: " << buffer << std::endl; // 打印接收到的消息响应
+    std::cout << "Received: " << buffer << std::endl;
 
     // quit
     client.send("QUIT\r\n").unwrap("fail to send QUIT");
     client.recv(buffer).unwrap("fail to receive QUIT response");
-    std::cout << "Received: " << buffer << std::endl; // 打印接收到的 QUIT 响应
+    std::cout << "Received: " << buffer << std::endl;
 }
