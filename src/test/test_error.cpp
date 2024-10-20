@@ -1,5 +1,5 @@
-#include "unit_test.h"
 #include "errors.h"
+#include "unit_test.h"
 
 static auto test() -> void {
     using dark::assertion;

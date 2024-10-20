@@ -1,6 +1,6 @@
 #pragma once
-#include "strings.h"
 #include "errors.h"
+#include "strings.h"
 #include "utility.h"
 #include <arpa/inet.h>
 #include <cstdint>
