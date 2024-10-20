@@ -8,7 +8,7 @@ static auto test() -> void {
     optional<int> a;
     optional<int> b(42);
     try {
-        a.unwrap("error: {}");
+        a.unwrap("expected error");
     } catch (const std::runtime_error &e) {
         dark::assertion(std::string(e.what()) == "assertion failed");
     }

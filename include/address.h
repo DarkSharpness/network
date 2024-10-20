@@ -1,5 +1,5 @@
 #pragma once
-#include "cstring.h"
+#include "strings.h"
 #include "errors.h"
 #include "utility.h"
 #include <arpa/inet.h>
@@ -24,7 +24,7 @@ public:
     constexpr Address(std::string_view ip, std::uint16_t port) noexcept : _M_addr{} {
         _M_addr.sin_family = AF_INET;
         _M_addr.sin_port   = host_to_network(port);
-        _M_addr.sin_addr   = {string_to_ipv4_noexcept(ip)};
+        _M_addr.sin_addr   = {string_to_ipv4_nocheck(ip)};
     }
 
     Address(cstring_view name, cstring_view service) noexcept : _M_addr{} {
@@ -93,7 +93,7 @@ public:
     }
 
     constexpr auto ip(std::string_view ip) noexcept -> Address & {
-        _M_addr.sin_addr = {string_to_ipv4_noexcept(ip)};
+        _M_addr.sin_addr = {string_to_ipv4_nocheck(ip)};
         return *this;
     }
 

@@ -1,5 +1,4 @@
 #pragma once
-
 #include "errors.h"
 #include <algorithm>
 #include <cerrno>

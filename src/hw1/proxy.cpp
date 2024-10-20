@@ -2,6 +2,7 @@
 #include "hw1/cache.h"
 #include "hw1/forward.h"
 #include "hw1/html.h"
+#include "select.h"
 #include "socket.h"
 #include <atomic>
 #include <csignal>

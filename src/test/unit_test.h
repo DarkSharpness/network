@@ -27,9 +27,9 @@ private:
 auto tester_instance() -> Tester &;
 
 struct Testcase {
-    using _Src = std::source_location;
+    using _Src_t = std::source_location;
     template <typename _F>
-    Testcase(_F &&function, _Src loc = _Src::current()) {
+    Testcase(_F &&function, _Src_t loc = _Src_t::current()) {
         tester_instance().add(loc.file_name(), std::forward<_F>(function));
     }
 };

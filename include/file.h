@@ -1,20 +1,18 @@
 #pragma once
 #include "optional.h"
 #include <cerrno>
-#include <type_traits>
 #include <unistd.h>
 #include <utility>
 
 namespace dark {
 
-template <typename _Tp>
-concept Serializable =
-    std::is_trivially_copy_constructible_v<_Tp> && std::is_trivially_destructible_v<_Tp>;
-
 struct FileManager {
+private:
+    using _Fd_t                       = int;
+    static constexpr _Fd_t _S_invalid = -1;
+
 public:
-    explicit FileManager() noexcept : _M_fd(_S_invalid) {}
-    explicit FileManager(int fd) noexcept : _M_fd(fd) {}
+    explicit FileManager(_Fd_t fd = _S_invalid) noexcept : _M_fd(fd) {}
 
     FileManager(const FileManager &)                     = delete;
     auto operator=(const FileManager &) -> FileManager & = delete;
@@ -34,17 +32,12 @@ public:
 
     [[nodiscard]]
     auto valid() const noexcept -> bool {
-        return _M_fd != _S_invalid;
+        return _M_fd >= 0;
     }
 
     [[nodiscard]]
     explicit operator bool() const noexcept {
         return this->valid();
-    }
-
-    auto set(int fd) noexcept -> void {
-        static_cast<void>(this->reset());
-        _M_fd = fd;
     }
 
     [[nodiscard]]
@@ -57,13 +50,12 @@ public:
     }
 
     [[nodiscard]]
-    auto unsafe_get() const noexcept -> int {
+    auto unsafe_get() const noexcept -> _Fd_t {
         return _M_fd;
     }
 
 private:
-    static constexpr int _S_invalid = -1;
-    int _M_fd;
+    _Fd_t _M_fd;
 };
 
 } // namespace dark

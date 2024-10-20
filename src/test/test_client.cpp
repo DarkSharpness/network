@@ -18,11 +18,7 @@ static auto test() -> void {
     while (!socket.connect(dark::Address{"127.0.0.1", 12345}))
         std::this_thread::sleep_for(1s);
 
-    auto message = std::string{};
-    std::cout << "Enter your message: \n";
-    std::getline(std::cin, message);
-
-    auto length = socket.send(message).value_or(0);
+    auto length = socket.send("Hello world!").value_or(0);
     std::cout << "Sent " << length << " bytes to server" << std::endl;
 }
 

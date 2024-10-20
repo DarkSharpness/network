@@ -35,7 +35,7 @@ inline auto receive_http(dark::Socket &conn, std::string &buffer, _Op &&op) -> v
             // Header is complete
             header_length  = pos + 4;
             auto content   = parse_http(header, "Content-Length: ");
-            content_length = dark::str_to_int_noexcept<std::size_t>(content);
+            content_length = dark::str_to_int_nocheck<std::size_t>(content);
         }
 
         // if here, header is complete
@@ -57,7 +57,7 @@ inline auto parse_host(std::string_view str) -> std::optional<std::pair<dark::Ad
         if (pos == std::string_view::npos)
             return {};
         auto host = str.substr(0, pos);
-        auto port = dark::str_to_int_noexcept<std::uint16_t>(str.substr(pos + 1));
+        auto port = dark::str_to_int_nocheck<std::uint16_t>(str.substr(pos + 1));
         return std::make_pair(dark::Address{std::string{host}, "", port}, false);
     } else {
         // We support only http now.
