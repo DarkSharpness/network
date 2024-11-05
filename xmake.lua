@@ -25,3 +25,6 @@ target("hw1")
 target("unit_test")
     add_includedirs("src/test/")
     add_files("src/test/*.cpp")
+
+target("flow")
+    add_files("src/flow/*.cpp")
